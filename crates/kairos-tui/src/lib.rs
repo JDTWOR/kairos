@@ -184,7 +184,16 @@ impl App {
                 }
             }
             KeyCode::Char('?') => self.overlay = Some(Overlay::Help),
-            KeyCode::Char('/') => self.overlay = Some(Overlay::Search),
+            KeyCode::Char('/') => {
+                // Consume the search shortcut here. Without the early return,
+                // the generic text-input handler below also inserts `/` into
+                // the prompt composer.
+                self.query.clear();
+                self.input.clear();
+                self.composer = false;
+                self.overlay = Some(Overlay::Search);
+                return None;
+            }
             KeyCode::Char('n') => {
                 self.input.clear();
                 self.composer = true;
