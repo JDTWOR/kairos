@@ -17,6 +17,7 @@ use ratatui::{
 };
 use std::{
     io,
+    process::Stdio,
     time::{Duration, Instant},
 };
 use uuid::Uuid;
@@ -306,6 +307,9 @@ async fn execute_command(store: &Store, app: &mut App, command: UiCommand) -> Re
                 .arg("resume")
                 .arg(task.id.to_string())
                 .arg("--background")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
                 .spawn()?;
             app.info = format!("Task #{} started in background", short_id(task.id));
             app.overlay = Some(Overlay::Info);
@@ -316,6 +320,9 @@ async fn execute_command(store: &Store, app: &mut App, command: UiCommand) -> Re
                 .arg("resume")
                 .arg(id.to_string())
                 .arg("--background")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
                 .spawn()?;
             app.info = "Resume requested in background".into();
             app.overlay = Some(Overlay::Info);
