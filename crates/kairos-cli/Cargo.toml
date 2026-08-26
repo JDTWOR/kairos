@@ -1,0 +1,25 @@
+[package]
+name = "kairos"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+[[bin]]
+name = "kairos"
+path = "src/main.rs"
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+clap.workspace = true
+kairos-core = { path = "../kairos-core", version = "0.1.0" }
+kairos-provider = { path = "../kairos-provider", version = "0.1.0" }
+kairos-runner = { path = "../kairos-runner", version = "0.1.0" }
+kairos-store = { path = "../kairos-store", version = "0.1.0" }
+kairos-tui = { path = "../kairos-tui", version = "0.1.0" }
+tokio.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true

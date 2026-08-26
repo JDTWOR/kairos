@@ -1,0 +1,18 @@
+[package]
+name = "kairos-store"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+uuid.workspace = true
+tokio.workspace = true
+kairos-core = { path = "../kairos-core", version = "0.1.0" }
