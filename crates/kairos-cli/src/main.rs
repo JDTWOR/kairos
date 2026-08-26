@@ -273,6 +273,10 @@ async fn execute_task(store: &Store, config: &AppConfig, id: Uuid, background: b
             .await?;
         conversation.id
     };
+    let conversation = store
+        .get_conversation(conversation_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("conversation not found"))?;
     let history = store.messages(conversation_id, 24).await?;
     let mut messages = vec![Message {
         role: "system".into(),
@@ -293,7 +297,7 @@ async fn execute_task(store: &Store, config: &AppConfig, id: Uuid, background: b
         ),
     });
     store.set_status(id, TaskStatus::Running).await?;
-    match provider.prompt(messages, &task.session_id).await {
+    match provider.prompt(messages, &conversation.session_id).await {
         Ok((output, usage)) => {
             store
                 .add_message(conversation_id, "assistant", &output)

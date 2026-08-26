@@ -54,6 +54,14 @@ impl Store {
             .bind(now).bind(now).execute(&self.pool).await?;
         Ok(conversation)
     }
+    pub async fn get_conversation(&self, id: Uuid) -> Result<Option<Conversation>> {
+        sqlx::query("SELECT * FROM conversations WHERE id=?")
+            .bind(id.to_string())
+            .fetch_optional(&self.pool)
+            .await?
+            .map(row_conversation)
+            .transpose()
+    }
     pub async fn create_task_in_conversation(
         &self,
         conversation: &Conversation,
@@ -70,7 +78,9 @@ impl Store {
             status: TaskStatus::Queued,
             model: model.into(),
             provider: "openrouter".into(),
-            session_id: conversation.session_id.clone(),
+            // Kept unique for compatibility with the original tasks schema.
+            // The stable provider session belongs to the conversation now.
+            session_id: Uuid::new_v4().to_string(),
             budget_usd: budget,
             plan: Vec::new(),
             checkpoint: None,
@@ -318,9 +328,16 @@ mod tests {
         let t = s.create_task("test", ".", "model", None).await.unwrap();
         let conversation = s.get_or_create_conversation(".", "ignored").await.unwrap();
         assert_eq!(t.conversation_id, Some(conversation.id));
-        assert_eq!(conversation.session_id, t.session_id);
+        assert_ne!(conversation.session_id, t.session_id);
         assert_eq!(s.messages(conversation.id, 10).await.unwrap().len(), 1);
-        assert_eq!(s.list_tasks().await.unwrap().len(), 1);
+        let second = s
+            .create_task("follow up", ".", "model", None)
+            .await
+            .unwrap();
+        assert_ne!(t.session_id, second.session_id);
+        assert_eq!(second.conversation_id, Some(conversation.id));
+        assert_eq!(s.messages(conversation.id, 10).await.unwrap().len(), 2);
+        assert_eq!(s.list_tasks().await.unwrap().len(), 2);
         s.set_status(t.id, TaskStatus::Running).await.unwrap();
         assert_eq!(
             s.get_task(t.id).await.unwrap().unwrap().status,
