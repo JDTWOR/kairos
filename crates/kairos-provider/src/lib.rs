@@ -68,8 +68,13 @@ impl OpenRouter {
             .header("HTTP-Referer", "https://kairos.local")
             .json(&request)
             .send()
-            .await?
-            .error_for_status()?;
+            .await?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            let body = body.chars().take(1200).collect::<String>();
+            anyhow::bail!("OpenRouter HTTP {status}: {body}");
+        }
         let mut usage = Usage::default();
         let mut buffer = String::new();
         let mut stream = response.bytes_stream();

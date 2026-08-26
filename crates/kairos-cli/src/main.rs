@@ -1,5 +1,5 @@
 use anyhow::{Result, bail};
-use chrono::Utc;
+use chrono::{Local, Utc};
 use clap::{Parser, Subcommand};
 use kairos_core::{AppConfig, TaskEvent, TaskStatus, normalize_repo};
 use kairos_provider::{Message, OpenRouter};
@@ -126,7 +126,7 @@ async fn main() -> Result<()> {
             for e in store.events(id).await? {
                 println!(
                     "{} [{}] {}{}",
-                    e.created_at.format("%H:%M:%S"),
+                    e.created_at.with_timezone(&Local).format("%H:%M:%S"),
                     e.kind,
                     e.message,
                     e.output.map(|s| format!("\n{s}")).unwrap_or_default()

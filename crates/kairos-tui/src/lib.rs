@@ -1,4 +1,5 @@
 use anyhow::Result;
+use chrono::Local;
 use crossterm::{
     event::{self, Event, KeyCode, KeyEvent},
     execute,
@@ -382,6 +383,7 @@ fn render(f: &mut Frame, app: &App) {
     }
 }
 fn header(f: &mut Frame, area: Rect) {
+    let has_key = std::env::var_os("OPENROUTER_API_KEY").is_some();
     let line = Line::from(vec![
         Span::styled(
             " KAIROS ",
@@ -392,7 +394,14 @@ fn header(f: &mut Frame, area: Rect) {
         Span::styled("  personal agent", Style::default().fg(theme::MUTED)),
         Span::raw(" "),
         Span::styled("OpenRouter", Style::default().fg(theme::TEXT)),
-        Span::styled("  ● connected ", Style::default().fg(theme::GREEN)),
+        Span::styled(
+            if has_key {
+                "  ● configured "
+            } else {
+                "  ○ no API key "
+            },
+            Style::default().fg(if has_key { theme::GREEN } else { theme::AMBER }),
+        ),
     ]);
     f.render_widget(
         Paragraph::new(line).style(Style::default().bg(theme::BG)),
@@ -573,7 +582,10 @@ fn render_active(f: &mut Frame, app: &App, area: Rect) {
         .map(|e| {
             Line::from(vec![
                 Span::styled(
-                    e.created_at.format("%H:%M").to_string(),
+                    e.created_at
+                        .with_timezone(&Local)
+                        .format("%H:%M")
+                        .to_string(),
                     Style::default().fg(theme::MUTED),
                 ),
                 Span::raw("  "),
@@ -599,7 +611,10 @@ fn render_activity(f: &mut Frame, app: &App, area: Rect) {
         .map(|e| {
             Line::from(vec![
                 Span::styled(
-                    e.created_at.format("%H:%M").to_string(),
+                    e.created_at
+                        .with_timezone(&Local)
+                        .format("%H:%M")
+                        .to_string(),
                     Style::default().fg(theme::MUTED),
                 ),
                 Span::raw(" "),
@@ -677,21 +692,27 @@ fn render_plan(f: &mut Frame, t: &Task, area: Rect) {
     )
 }
 fn render_logs(f: &mut Frame, app: &App, area: Rect) {
-    let lines = app
-        .events
-        .iter()
-        .map(|e| {
-            Line::from(vec![
-                Span::styled(
-                    e.created_at.format("%H:%M:%S").to_string(),
-                    Style::default().fg(theme::MUTED),
-                ),
-                Span::raw("  "),
-                Span::styled(format!("{} ", e.kind.to_uppercase()), kind_style(&e.kind)),
-                Span::styled(e.message.clone(), Style::default().fg(theme::TEXT)),
-            ])
-        })
-        .collect::<Vec<_>>();
+    let mut lines = Vec::new();
+    for e in &app.events {
+        lines.push(Line::from(vec![
+            Span::styled(
+                e.created_at
+                    .with_timezone(&Local)
+                    .format("%H:%M:%S")
+                    .to_string(),
+                Style::default().fg(theme::MUTED),
+            ),
+            Span::raw("  "),
+            Span::styled(format!("{} ", e.kind.to_uppercase()), kind_style(&e.kind)),
+            Span::styled(e.message.clone(), Style::default().fg(theme::TEXT)),
+        ]));
+        if let Some(output) = &e.output {
+            lines.push(Line::from(vec![
+                Span::raw("             "),
+                Span::styled(output.clone(), Style::default().fg(theme::RED)),
+            ]));
+        }
+    }
     f.render_widget(
         Paragraph::new(lines)
             .block(panel(" LOGS ", true))
