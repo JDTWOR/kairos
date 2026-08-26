@@ -9,6 +9,7 @@ use kairos_core::{
     AppConfig, Approval, Message as ConversationMessage, Task, TaskEvent, TaskStatus,
     normalize_repo,
 };
+use kairos_provider::{Message as ProviderMessage, OpenRouter};
 use kairos_runner::Runner;
 use kairos_store::Store;
 use ratatui::{
@@ -367,6 +368,72 @@ enum UiCommand {
     Cost,
 }
 
+fn should_create_run(prompt: &str) -> bool {
+    let prompt = prompt.to_lowercase();
+    [
+        "implement",
+        "implementa",
+        "modifica",
+        "cambia",
+        "cambiar",
+        "crea",
+        "crear",
+        "añade",
+        "agrega",
+        "elimina",
+        "borra",
+        "arregla",
+        "corrige",
+        "refactoriza",
+        "migra",
+        "ejecuta",
+        "corre",
+        "test",
+        "prueba",
+        "analiza el repositorio",
+        "revisa el repositorio",
+        "inspecciona",
+        "diagnostica",
+        "deploy",
+        "despliega",
+    ]
+    .iter()
+    .any(|verb| prompt.contains(verb))
+}
+
+async fn answer_direct(store: &Store, app: &mut App, prompt: &str) -> Result<()> {
+    let conversation_id = app
+        .conversation_id
+        .ok_or_else(|| anyhow::anyhow!("conversation not initialized"))?;
+    store.add_message(conversation_id, "user", prompt).await?;
+    let history = store.messages(conversation_id, 48).await?;
+    let mut messages = vec![ProviderMessage {
+        role: "system".into(),
+        content: "You are Kairos, a helpful personal terminal assistant. Answer naturally and concisely in Spanish when the user writes Spanish. This is a conversation, not an execution request. Do not invent repository changes or propose coding plans unless the user asks for work.".into(),
+    }];
+    messages.extend(history.into_iter().map(|message| ProviderMessage {
+        role: message.role,
+        content: message.content,
+    }));
+    let config = AppConfig::load()?;
+    let provider = OpenRouter::from_env(config.model, config.fallbacks)?;
+    let (answer, _) = provider
+        .prompt(
+            messages,
+            &store
+                .get_conversation(conversation_id)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("conversation not found"))?
+                .session_id,
+        )
+        .await?;
+    store
+        .add_message(conversation_id, "assistant", &answer)
+        .await?;
+    app.last_refresh = Instant::now() - Duration::from_secs(2);
+    Ok(())
+}
+
 pub async fn run(store: Store, focus: Option<Uuid>) -> Result<()> {
     let mut app = App::new();
     let repo = normalize_repo(std::env::current_dir()?)?;
@@ -413,6 +480,13 @@ async fn run_loop(
 async fn execute_command(store: &Store, app: &mut App, command: UiCommand) -> Result<()> {
     match command {
         UiCommand::Create(title) => {
+            if !should_create_run(&title) {
+                if let Err(error) = answer_direct(store, app, &title).await {
+                    app.info = format!("Direct response failed: {error}");
+                    app.overlay = Some(Overlay::Info);
+                }
+                return Ok(());
+            }
             let config = AppConfig::load()?;
             let repo = normalize_repo(std::env::current_dir()?)?;
             let task = store
@@ -1124,6 +1198,16 @@ mod tests {
     use super::*;
     use kairos_core::AppConfig;
     use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn routes_conversation_and_work_requests_separately() {
+        assert!(!should_create_run("hola"));
+        assert!(!should_create_run("¿quién eres?"));
+        assert!(!should_create_run("¿cuál fue mi primera pregunta?"));
+        assert!(should_create_run("implementa OAuth"));
+        assert!(should_create_run("ejecuta los tests"));
+        assert!(should_create_run("analiza el repositorio"));
+    }
 
     #[test]
     fn dashboard_renders_at_supported_sizes() {

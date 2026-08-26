@@ -1387,6 +1387,7 @@ dependencies = [
  "crossterm",
  "insta",
  "kairos-core",
+ "kairos-provider",
  "kairos-runner",
  "kairos-store",
  "ratatui",

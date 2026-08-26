@@ -17,6 +17,7 @@ tuirealm.workspace = true
 kairos-core = { path = "../kairos-core", version = "0.1.0" }
 kairos-store = { path = "../kairos-store", version = "0.1.0" }
 kairos-runner = { path = "../kairos-runner", version = "0.1.0" }
+kairos-provider = { path = "../kairos-provider", version = "0.1.0" }
 tokio.workspace = true
 uuid.workspace = true
 insta = { version = "1", optional = true }
