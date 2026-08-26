@@ -404,8 +404,15 @@ async fn execute_command(store: &Store, app: &mut App, command: UiCommand) -> Re
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .spawn()?;
+            // Keep the dashboard unobstructed after submitting a prompt. The
+            // task list and activity panel are refreshed below and provide the
+            // persistent status for the new background task.
             app.info = format!("Task #{} started in background", short_id(task.id));
-            app.overlay = Some(Overlay::Info);
+            app.overlay = None;
+            app.tasks = store.list_tasks().await?;
+            if let Some(index) = app.tasks.iter().position(|item| item.id == task.id) {
+                app.selected = index;
+            }
             app.last_refresh = Instant::now() - Duration::from_secs(2);
         }
         UiCommand::Resume(id) => {
