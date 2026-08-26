@@ -262,10 +262,42 @@ async fn execute_task(store: &Store, config: &AppConfig, id: Uuid, background: b
             return Err(e);
         }
     };
-    let messages=vec![Message{role:"system".into(),content:"You are Kairos, a persistent terminal agent. Rules: use repository context first; be concise; never claim an action you did not execute; propose a numbered plan before changes. Dynamic task information follows this stable prefix.".into()},Message{role:"user".into(),content:format!("Task: {}\nRepository: {}\nWorktree: {}\nResume from checkpoint: {}",task.title,task.repo.display(),worktree.display(),task.checkpoint.as_deref().unwrap_or("none"))}];
+    let conversation_id = if let Some(id) = task.conversation_id {
+        id
+    } else {
+        let conversation = store
+            .get_or_create_conversation(&task.repo.to_string_lossy(), &task.title)
+            .await?;
+        store
+            .add_message(conversation.id, "user", &task.title)
+            .await?;
+        conversation.id
+    };
+    let history = store.messages(conversation_id, 24).await?;
+    let mut messages = vec![Message {
+        role: "system".into(),
+        content: "You are Kairos, a persistent terminal agent. Rules: use repository context first; be concise; never claim an action you did not execute; propose a numbered plan before changes. Dynamic task information follows this stable prefix.".into(),
+    }];
+    messages.extend(history.into_iter().map(|message| Message {
+        role: message.role,
+        content: message.content,
+    }));
+    messages.push(Message {
+        role: "user".into(),
+        content: format!(
+            "Execution context:\nTask: {}\nRepository: {}\nWorktree: {}\nResume from checkpoint: {}",
+            task.title,
+            task.repo.display(),
+            worktree.display(),
+            task.checkpoint.as_deref().unwrap_or("none")
+        ),
+    });
     store.set_status(id, TaskStatus::Running).await?;
     match provider.prompt(messages, &task.session_id).await {
         Ok((output, usage)) => {
+            store
+                .add_message(conversation_id, "assistant", &output)
+                .await?;
             let plan = output
                 .lines()
                 .filter(|l| {

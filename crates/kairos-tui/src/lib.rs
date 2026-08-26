@@ -1064,6 +1064,7 @@ mod tests {
             let now = chrono::Utc::now();
             app.tasks.push(Task {
                 id: Uuid::new_v4(),
+                conversation_id: None,
                 title: "OAuth Google".into(),
                 repo: ".".into(),
                 status: TaskStatus::Running,

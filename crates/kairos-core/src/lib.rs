@@ -52,6 +52,8 @@ impl FromStr for TaskStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {
     pub id: Uuid,
+    #[serde(default)]
+    pub conversation_id: Option<Uuid>,
     pub title: String,
     pub repo: PathBuf,
     pub status: TaskStatus,
@@ -65,6 +67,23 @@ pub struct Task {
     pub cost_usd: f64,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Conversation {
+    pub id: Uuid,
+    pub title: String,
+    pub repo: PathBuf,
+    pub session_id: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Message {
+    pub id: Uuid,
+    pub conversation_id: Uuid,
+    pub role: String,
+    pub content: String,
+    pub created_at: DateTime<Utc>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskEvent {

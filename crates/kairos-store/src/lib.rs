@@ -1,6 +1,6 @@
 use anyhow::Result;
 use chrono::Utc;
-use kairos_core::{Approval, Task, TaskEvent, TaskStatus};
+use kairos_core::{Approval, Conversation, Message, Task, TaskEvent, TaskStatus};
 use sqlx::{Row, SqlitePool, sqlite::SqlitePoolOptions};
 use uuid::Uuid;
 pub struct Store {
@@ -22,15 +22,55 @@ impl Store {
         model: &str,
         budget: Option<f64>,
     ) -> Result<Task> {
+        let conversation = self.get_or_create_conversation(repo, title).await?;
+        self.create_task_in_conversation(&conversation, title, model, budget)
+            .await
+    }
+    pub async fn get_or_create_conversation(
+        &self,
+        repo: &str,
+        title: &str,
+    ) -> Result<Conversation> {
+        if let Some(row) =
+            sqlx::query("SELECT * FROM conversations WHERE repo=? ORDER BY updated_at DESC LIMIT 1")
+                .bind(repo)
+                .fetch_optional(&self.pool)
+                .await?
+        {
+            return row_conversation(row);
+        }
+        let now = Utc::now();
+        let conversation = Conversation {
+            id: Uuid::new_v4(),
+            title: title.to_string(),
+            repo: repo.into(),
+            session_id: Uuid::new_v4().to_string(),
+            created_at: now,
+            updated_at: now,
+        };
+        sqlx::query("INSERT INTO conversations (id,title,repo,session_id,created_at,updated_at) VALUES (?,?,?,?,?,?)")
+            .bind(conversation.id.to_string()).bind(&conversation.title)
+            .bind(conversation.repo.to_string_lossy().to_string()).bind(&conversation.session_id)
+            .bind(now).bind(now).execute(&self.pool).await?;
+        Ok(conversation)
+    }
+    pub async fn create_task_in_conversation(
+        &self,
+        conversation: &Conversation,
+        title: &str,
+        model: &str,
+        budget: Option<f64>,
+    ) -> Result<Task> {
         let now = Utc::now();
         let task = Task {
             id: Uuid::new_v4(),
+            conversation_id: Some(conversation.id),
             title: title.into(),
-            repo: repo.into(),
+            repo: conversation.repo.clone(),
             status: TaskStatus::Queued,
             model: model.into(),
             provider: "openrouter".into(),
-            session_id: Uuid::new_v4().to_string(),
+            session_id: conversation.session_id.clone(),
             budget_usd: budget,
             plan: Vec::new(),
             checkpoint: None,
@@ -39,8 +79,54 @@ impl Store {
             created_at: now,
             updated_at: now,
         };
-        sqlx::query("INSERT INTO tasks (id,title,repo,status,model,provider,session_id,budget_usd,plan,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)").bind(task.id.to_string()).bind(&task.title).bind(task.repo.to_string_lossy().to_string()).bind(task.status.to_string()).bind(&task.model).bind(&task.provider).bind(&task.session_id).bind(task.budget_usd).bind("[]").bind(now).bind(now).execute(&self.pool).await?;
+        sqlx::query("INSERT INTO tasks (id,title,repo,status,model,provider,session_id,budget_usd,plan,created_at,updated_at,conversation_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)").bind(task.id.to_string()).bind(&task.title).bind(task.repo.to_string_lossy().to_string()).bind(task.status.to_string()).bind(&task.model).bind(&task.provider).bind(&task.session_id).bind(task.budget_usd).bind("[]").bind(now).bind(now).bind(conversation.id.to_string()).execute(&self.pool).await?;
+        self.add_message(conversation.id, "user", title).await?;
         Ok(task)
+    }
+    pub async fn messages(&self, conversation_id: Uuid, limit: i64) -> Result<Vec<Message>> {
+        let rows = sqlx::query(
+            "SELECT * FROM messages WHERE conversation_id=? ORDER BY created_at DESC LIMIT ?",
+        )
+        .bind(conversation_id.to_string())
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut messages = rows
+            .into_iter()
+            .map(row_message)
+            .collect::<Result<Vec<_>>>()?;
+        messages.reverse();
+        Ok(messages)
+    }
+    pub async fn add_message(
+        &self,
+        conversation_id: Uuid,
+        role: &str,
+        content: &str,
+    ) -> Result<Message> {
+        let message = Message {
+            id: Uuid::new_v4(),
+            conversation_id,
+            role: role.into(),
+            content: content.into(),
+            created_at: Utc::now(),
+        };
+        sqlx::query(
+            "INSERT INTO messages (id,conversation_id,role,content,created_at) VALUES (?,?,?,?,?)",
+        )
+        .bind(message.id.to_string())
+        .bind(conversation_id.to_string())
+        .bind(&message.role)
+        .bind(&message.content)
+        .bind(message.created_at)
+        .execute(&self.pool)
+        .await?;
+        sqlx::query("UPDATE conversations SET updated_at=? WHERE id=?")
+            .bind(message.created_at)
+            .bind(conversation_id.to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(message)
     }
     pub async fn list_tasks(&self) -> Result<Vec<Task>> {
         let rows = sqlx::query("SELECT * FROM tasks ORDER BY updated_at DESC")
@@ -185,6 +271,10 @@ impl Store {
 fn row_task(r: sqlx::sqlite::SqliteRow) -> Result<Task> {
     Ok(Task {
         id: Uuid::parse_str(r.get::<String, _>("id").as_str())?,
+        conversation_id: r
+            .get::<Option<String>, _>("conversation_id")
+            .map(|id| Uuid::parse_str(&id))
+            .transpose()?,
         title: r.get("title"),
         repo: r.get::<String, _>("repo").into(),
         status: r.get::<String, _>("status").parse()?,
@@ -200,6 +290,25 @@ fn row_task(r: sqlx::sqlite::SqliteRow) -> Result<Task> {
         updated_at: r.get("updated_at"),
     })
 }
+fn row_conversation(r: sqlx::sqlite::SqliteRow) -> Result<Conversation> {
+    Ok(Conversation {
+        id: Uuid::parse_str(r.get::<String, _>("id").as_str())?,
+        title: r.get("title"),
+        repo: r.get::<String, _>("repo").into(),
+        session_id: r.get("session_id"),
+        created_at: r.get("created_at"),
+        updated_at: r.get("updated_at"),
+    })
+}
+fn row_message(r: sqlx::sqlite::SqliteRow) -> Result<Message> {
+    Ok(Message {
+        id: Uuid::parse_str(r.get::<String, _>("id").as_str())?,
+        conversation_id: Uuid::parse_str(r.get::<String, _>("conversation_id").as_str())?,
+        role: r.get("role"),
+        content: r.get("content"),
+        created_at: r.get("created_at"),
+    })
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -207,6 +316,10 @@ mod tests {
     async fn persists_task() {
         let s = Store::connect("sqlite::memory:").await.unwrap();
         let t = s.create_task("test", ".", "model", None).await.unwrap();
+        let conversation = s.get_or_create_conversation(".", "ignored").await.unwrap();
+        assert_eq!(t.conversation_id, Some(conversation.id));
+        assert_eq!(conversation.session_id, t.session_id);
+        assert_eq!(s.messages(conversation.id, 10).await.unwrap().len(), 1);
         assert_eq!(s.list_tasks().await.unwrap().len(), 1);
         s.set_status(t.id, TaskStatus::Running).await.unwrap();
         assert_eq!(
