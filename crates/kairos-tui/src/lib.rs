@@ -21,6 +21,12 @@ use std::{
     process::Stdio,
     time::{Duration, Instant},
 };
+use tuirealm::{
+    command::{Cmd, CmdResult},
+    component::Component,
+    props::{AttrValue, Attribute, QueryResult},
+    state::{State, StateValue},
+};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,11 +58,84 @@ struct App {
     query: String,
     last_refresh: Instant,
     should_quit: bool,
-    input: String,
     info: String,
     pending_approval: Option<Approval>,
     composer: bool,
+    prompt: PromptComponent,
 }
+
+/// Stateful text input component backed by tui-realm's component contract.
+/// Kairos keeps the surrounding dashboard in Ratatui, while prompt editing
+/// uses tui-realm commands so input behavior is reusable and testable.
+#[derive(Clone)]
+struct PromptComponent {
+    value: String,
+    placeholder: &'static str,
+}
+
+impl PromptComponent {
+    fn new() -> Self {
+        Self {
+            value: String::new(),
+            placeholder: "Ask Kairos to work on this repository…",
+        }
+    }
+
+    fn clear(&mut self) {
+        self.value.clear();
+    }
+
+    fn draw(&self, f: &mut Frame, area: Rect, focused: bool) {
+        let text = if self.value.is_empty() && !focused {
+            self.placeholder.to_string()
+        } else {
+            format!("{}{}", if focused { "› " } else { "  " }, self.value)
+        };
+        f.render_widget(
+            Paragraph::new(text)
+                .style(Style::default().fg(if focused { theme::TEXT } else { theme::MUTED }))
+                .block(panel(" PROMPT ", focused)),
+            area,
+        );
+    }
+}
+
+impl Component for PromptComponent {
+    fn view(&mut self, frame: &mut Frame, area: tuirealm::ratatui::layout::Rect) {
+        self.draw(frame, area, true);
+    }
+
+    fn query(&self, _: Attribute) -> Option<QueryResult<'_>> {
+        None
+    }
+
+    fn attr(&mut self, _: Attribute, _: AttrValue) {}
+
+    fn state(&self) -> State {
+        State::Single(StateValue::String(self.value.clone()))
+    }
+
+    fn perform(&mut self, cmd: Cmd) -> CmdResult {
+        match cmd {
+            Cmd::Type(c) => self.value.push(c),
+            Cmd::Delete => {
+                self.value.pop();
+            }
+            Cmd::Cancel => self.clear(),
+            Cmd::Submit
+            | Cmd::Move(_)
+            | Cmd::Scroll(_)
+            | Cmd::GoTo(_)
+            | Cmd::Toggle
+            | Cmd::Change
+            | Cmd::Tick
+            | Cmd::Custom(_)
+            | Cmd::None => return CmdResult::NoChange,
+        }
+        CmdResult::Changed(self.state())
+    }
+}
+
 impl App {
     fn new() -> Self {
         Self {
@@ -69,10 +148,10 @@ impl App {
             query: String::new(),
             last_refresh: Instant::now() - Duration::from_secs(2),
             should_quit: false,
-            input: String::new(),
             info: String::new(),
             pending_approval: None,
             composer: false,
+            prompt: PromptComponent::new(),
         }
     }
     fn task(&self) -> Option<&Task> {
@@ -124,11 +203,13 @@ impl App {
             match key.code {
                 KeyCode::Esc => self.overlay = None,
                 KeyCode::Backspace => {
-                    self.input.pop();
+                    self.prompt.perform(Cmd::Delete);
                 }
-                KeyCode::Char(c) => self.input.push(c),
-                KeyCode::Enter if !self.input.trim().is_empty() => {
-                    return Some(UiCommand::Create(self.input.trim().to_string()));
+                KeyCode::Char(c) => {
+                    self.prompt.perform(Cmd::Type(c));
+                }
+                KeyCode::Enter if !self.prompt.value.trim().is_empty() => {
+                    return Some(UiCommand::Create(self.prompt.value.trim().to_string()));
                 }
                 _ => {}
             }
@@ -138,18 +219,20 @@ impl App {
             match key.code {
                 KeyCode::Esc => {
                     self.composer = false;
-                    self.input.clear();
+                    self.prompt.perform(Cmd::Cancel);
                 }
                 KeyCode::Backspace => {
-                    self.input.pop();
+                    self.prompt.perform(Cmd::Delete);
                 }
-                KeyCode::Enter if !self.input.trim().is_empty() => {
-                    let title = self.input.trim().to_string();
-                    self.input.clear();
+                KeyCode::Enter if !self.prompt.value.trim().is_empty() => {
+                    let title = self.prompt.value.trim().to_string();
+                    self.prompt.perform(Cmd::Cancel);
                     self.composer = false;
                     return Some(UiCommand::Create(title));
                 }
-                KeyCode::Char(c) => self.input.push(c),
+                KeyCode::Char(c) => {
+                    self.prompt.perform(Cmd::Type(c));
+                }
                 _ => {}
             }
             return None;
@@ -189,18 +272,18 @@ impl App {
                 // the generic text-input handler below also inserts `/` into
                 // the prompt composer.
                 self.query.clear();
-                self.input.clear();
+                self.prompt.clear();
                 self.composer = false;
                 self.overlay = Some(Overlay::Search);
                 return None;
             }
             KeyCode::Char('n') => {
-                self.input.clear();
+                self.prompt.clear();
                 self.composer = true;
                 return None;
             }
             KeyCode::Char('i') => {
-                self.input.clear();
+                self.prompt.clear();
                 self.composer = true;
                 return None;
             }
@@ -255,7 +338,7 @@ impl App {
                 .contains(crossterm::event::KeyModifiers::CONTROL)
             && !c.is_control()
         {
-            self.input.push(c);
+            self.prompt.perform(Cmd::Type(c));
             self.composer = true;
         }
         None
@@ -454,22 +537,7 @@ fn render_dashboard(f: &mut Frame, app: &App, area: Rect) {
     )
 }
 fn render_composer(f: &mut Frame, app: &App, area: Rect) {
-    let label = if app.composer { " › " } else { "   " };
-    let text = if app.composer {
-        format!("{}{}", label, app.input)
-    } else {
-        format!("{}Ask Kairos to work on this repository…", label)
-    };
-    f.render_widget(
-        Paragraph::new(text)
-            .style(Style::default().fg(if app.composer {
-                theme::TEXT
-            } else {
-                theme::MUTED
-            }))
-            .block(panel(" PROMPT ", app.composer)),
-        area,
-    )
+    app.prompt.draw(f, area, app.composer)
 }
 fn render_tasks(f: &mut Frame, app: &App, area: Rect) {
     let items = app
@@ -849,7 +917,7 @@ fn render_overlay(f: &mut Frame, app: &App, overlay: Overlay, area: Rect) {
                     .fg(theme::CYAN)
                     .add_modifier(Modifier::BOLD),
             )),
-            Line::from(format!("> {}", app.input)),
+            Line::from(format!("> {}", app.prompt.value)),
             Line::from(Span::styled(
                 "Enter create · Esc cancel",
                 Style::default().fg(theme::MUTED),
