@@ -5,7 +5,10 @@ use crossterm::{
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use kairos_core::{AppConfig, Approval, Task, TaskEvent, TaskStatus, normalize_repo};
+use kairos_core::{
+    AppConfig, Approval, Message as ConversationMessage, Task, TaskEvent, TaskStatus,
+    normalize_repo,
+};
 use kairos_runner::Runner;
 use kairos_store::Store;
 use ratatui::{
@@ -49,6 +52,8 @@ enum Focus {
     Activity,
 }
 struct App {
+    conversation_id: Option<Uuid>,
+    messages: Vec<ConversationMessage>,
     tasks: Vec<Task>,
     events: Vec<TaskEvent>,
     selected: usize,
@@ -139,6 +144,8 @@ impl Component for PromptComponent {
 impl App {
     fn new() -> Self {
         Self {
+            conversation_id: None,
+            messages: vec![],
             tasks: vec![],
             events: vec![],
             selected: 0,
@@ -167,6 +174,11 @@ impl App {
         }
         self.events = if let Some(t) = self.task() {
             store.events(t.id).await?
+        } else {
+            vec![]
+        };
+        self.messages = if let Some(id) = self.conversation_id {
+            store.messages(id, 48).await?
         } else {
             vec![]
         };
@@ -357,9 +369,19 @@ enum UiCommand {
 
 pub async fn run(store: Store, focus: Option<Uuid>) -> Result<()> {
     let mut app = App::new();
+    let repo = normalize_repo(std::env::current_dir()?)?;
+    app.conversation_id = Some(
+        store
+            .get_or_create_conversation(&repo.to_string_lossy(), "Kairos conversation")
+            .await?
+            .id,
+    );
     if let Some(id) = focus {
         app.tasks = store.list_tasks().await?;
         app.selected = app.tasks.iter().position(|t| t.id == id).unwrap_or(0);
+        if let Some(task) = app.tasks.get(app.selected) {
+            app.conversation_id = task.conversation_id.or(app.conversation_id);
+        }
     }
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -470,7 +492,7 @@ async fn execute_command(store: &Store, app: &mut App, command: UiCommand) -> Re
 fn render(f: &mut Frame, app: &App) {
     let area = f.area();
     f.render_widget(Block::default().style(Style::default().bg(theme::BG)), area);
-    if area.width < 60 || area.height < 16 {
+    if area.width <= 80 || area.height < 16 {
         render_narrow(f, app, area)
     } else if app.route == Route::Detail {
         render_detail(f, app, area)
@@ -527,21 +549,66 @@ fn render_dashboard(f: &mut Frame, app: &App, area: Rect) {
     ])
     .split(area);
     header(f, rows[0]);
-    let cols = Layout::horizontal([
-        Constraint::Percentage(30),
-        Constraint::Percentage(44),
-        Constraint::Percentage(26),
-    ])
-    .split(rows[1]);
-    render_tasks(f, app, cols[0]);
-    render_active(f, app, cols[1]);
-    render_activity(f, app, cols[2]);
+    let cols = Layout::horizontal([Constraint::Min(44), Constraint::Length(30)]).split(rows[1]);
+    render_conversation(f, app, cols[0]);
+    let sidebar =
+        Layout::vertical([Constraint::Percentage(62), Constraint::Percentage(38)]).split(cols[1]);
+    render_tasks(f, app, sidebar[0]);
+    render_activity(f, app, sidebar[1]);
     render_composer(f, app, rows[2]);
     footer(
         f,
         rows[3],
         "[Enter] Open   [j/k] Navigate   [/] Search   [n] New   [r] Resume   [a] Approve   [q] Quit",
     )
+}
+fn render_conversation(f: &mut Frame, app: &App, area: Rect) {
+    let mut lines = Vec::new();
+    if app.messages.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "Start a conversation with Kairos",
+            Style::default().fg(theme::MUTED),
+        )));
+        lines.push(Line::from(""));
+        lines.push(Line::from(
+            "Ask about this repository, request a change, or type /help.",
+        ));
+    } else {
+        for message in &app.messages {
+            let (label, color) = match message.role.as_str() {
+                "user" => ("YOU", theme::CYAN),
+                "assistant" => ("KAIROS", theme::VIOLET),
+                _ => (message.role.as_str(), theme::MUTED),
+            };
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("{}  ", label),
+                    Style::default().fg(color).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    message
+                        .created_at
+                        .with_timezone(&Local)
+                        .format("%H:%M")
+                        .to_string(),
+                    Style::default().fg(theme::MUTED),
+                ),
+            ]));
+            for content_line in message.content.lines() {
+                lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(content_line.to_string(), Style::default().fg(theme::TEXT)),
+                ]));
+            }
+            lines.push(Line::from(""));
+        }
+    }
+    f.render_widget(
+        Paragraph::new(lines)
+            .block(panel(" CONVERSATION ", app.focused == Focus::Main))
+            .wrap(Wrap { trim: false }),
+        area,
+    );
 }
 fn render_composer(f: &mut Frame, app: &App, area: Rect) {
     app.prompt.draw(f, area, app.composer)
@@ -589,6 +656,7 @@ fn render_tasks(f: &mut Frame, app: &App, area: Rect) {
         &mut state,
     )
 }
+#[allow(dead_code)]
 fn render_active(f: &mut Frame, app: &App, area: Rect) {
     let Some(t) = app.task() else {
         f.render_widget(
